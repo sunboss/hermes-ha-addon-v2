@@ -2,27 +2,31 @@ from __future__ import annotations
 
 import os
 import urllib.error
+import urllib.parse
 import urllib.request
 from pathlib import Path
 
 import yaml
 from fastapi import FastAPI, HTTPException, Request
-from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, Response
+from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, RedirectResponse, Response
 
 from hermes_ui.auth_bridge import clear_session, complete_login, get_status, start_login
+from hermes_ui.provider_shim import chat_completions as shim_chat_completions
+from hermes_ui.provider_shim import list_models as shim_list_models
 
 API_BASE = os.environ.get('HERMES_API_UPSTREAM', 'http://127.0.0.1:8642')
 API_KEY = os.environ.get('API_SERVER_KEY', '')
 STATIC_DIR = Path('/opt/hermes-ha-addon/hermes_ui/static')
 CONFIG_PATH = Path(os.environ.get('HERMES_HOME', '/data')) / 'config.yaml'
+PANEL_BASE = f"http://{os.environ.get('DASHBOARD_HOST', '127.0.0.1')}:{os.environ.get('DASHBOARD_PORT', '9119')}"
 
 app = FastAPI(title='Hermes Agent V2 UI')
 
 
-def _proxy(method: str, path: str, body: bytes | None = None, content_type: str | None = None) -> Response:
-    url = f'{API_BASE}{path}'
+def _proxy_raw(base_url: str, method: str, path: str, body: bytes | None = None, content_type: str | None = None) -> Response:
+    url = f'{base_url}{path}'
     headers: dict[str, str] = {}
-    if API_KEY:
+    if base_url == API_BASE and API_KEY:
         headers['Authorization'] = f'Bearer {API_KEY}'
     if content_type:
         headers['Content-Type'] = content_type
@@ -36,7 +40,15 @@ def _proxy(method: str, path: str, body: bytes | None = None, content_type: str 
         media_type = exc.headers.get('Content-Type', 'application/json')
         return Response(content=exc.read(), status_code=exc.code, media_type=media_type)
     except Exception as exc:
-        raise HTTPException(status_code=503, detail=f'gateway_unavailable: {type(exc).__name__}')
+        raise HTTPException(status_code=503, detail=f'upstream_unavailable:{type(exc).__name__}')
+
+
+def _proxy_gateway(method: str, path: str, body: bytes | None = None, content_type: str | None = None) -> Response:
+    return _proxy_raw(API_BASE, method, path, body, content_type)
+
+
+def _proxy_panel(method: str, path: str, body: bytes | None = None, content_type: str | None = None) -> Response:
+    return _proxy_raw(PANEL_BASE, method, path, body, content_type)
 
 
 @app.get('/', response_class=HTMLResponse)
@@ -57,16 +69,25 @@ def styles_css() -> FileResponse:
 @app.get('/health')
 def health() -> JSONResponse:
     gateway = 'starting'
+    panel = 'disabled' if os.environ.get('ENABLE_DASHBOARD', 'true') != 'true' else 'starting'
     try:
-        response = _proxy('GET', '/health')
+        response = _proxy_gateway('GET', '/health')
         if 200 <= response.status_code < 300:
             gateway = 'ready'
     except Exception:
         gateway = 'starting'
+    if os.environ.get('ENABLE_DASHBOARD', 'true') == 'true':
+        try:
+            response = _proxy_panel('GET', '/docs')
+            if 200 <= response.status_code < 500:
+                panel = 'ready'
+        except Exception:
+            panel = 'starting'
     return JSONResponse(
         {
             'status': 'ok',
             'gateway': gateway,
+            'panel': panel,
             'workspace_root': os.environ.get('WORKSPACE_ROOT', '/share/hermes/workspace'),
         }
     )
@@ -107,9 +128,34 @@ def auth_logout() -> JSONResponse:
     return JSONResponse(clear_session())
 
 
+@app.get('/shim/v1/models')
+def shim_models() -> JSONResponse:
+    return JSONResponse(shim_list_models())
+
+
+@app.post('/shim/v1/chat/completions')
+async def shim_chat(request: Request) -> JSONResponse:
+    body = await request.json()
+    status, payload = shim_chat_completions(body)
+    return JSONResponse(payload, status_code=status)
+
+
+@app.get('/panel')
+def panel_root() -> RedirectResponse:
+    return RedirectResponse('/panel/')
+
+
+@app.api_route('/panel/{path:path}', methods=['GET', 'POST', 'PUT', 'PATCH', 'DELETE'])
+async def panel_proxy(path: str, request: Request) -> Response:
+    body = await request.body()
+    qs = request.url.query
+    upstream_path = '/' + path + (f'?{qs}' if qs else '')
+    return _proxy_panel(request.method, upstream_path, body if body else None, request.headers.get('content-type'))
+
+
 @app.api_route('/api/{path:path}', methods=['GET', 'POST', 'PUT', 'PATCH', 'DELETE'])
 async def api_proxy(path: str, request: Request) -> Response:
     body = await request.body()
     qs = request.url.query
     upstream_path = '/' + path + (f'?{qs}' if qs else '')
-    return _proxy(request.method, upstream_path, body if body else None, request.headers.get('content-type'))
+    return _proxy_gateway(request.method, upstream_path, body if body else None, request.headers.get('content-type'))

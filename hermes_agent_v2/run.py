@@ -4,6 +4,7 @@ import asyncio
 import json
 import os
 import signal
+import subprocess
 import sys
 from pathlib import Path
 
@@ -17,6 +18,14 @@ def _write_status(payload: dict) -> None:
     RUNTIME_STATUS.write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n", encoding='utf-8')
 
 
+def _dashboard_available() -> bool:
+    try:
+        result = subprocess.run(['hermes', 'dashboard', '--help'], capture_output=True, text=True, timeout=15)
+        return result.returncode == 0
+    except Exception:
+        return False
+
+
 class Supervisor:
     def __init__(self, settings: dict):
         self.settings = settings
@@ -27,17 +36,26 @@ class Supervisor:
         env = os.environ.copy()
         env.update(self.settings['env'])
         await self._start_gateway(env)
+        if self.settings['enable_dashboard'] and _dashboard_available():
+            await self._start_dashboard(env)
         await self._start_ui(env)
         _write_status({'state': 'running', 'services': list(self.procs.keys())})
 
     async def _start_gateway(self, env: dict[str, str]) -> None:
+        proc = await asyncio.create_subprocess_exec('hermes', 'gateway', 'run', env=env, stdout=sys.stdout, stderr=sys.stderr)
+        self.procs['gateway'] = proc
+
+    async def _start_dashboard(self, env: dict[str, str]) -> None:
         proc = await asyncio.create_subprocess_exec(
-            'hermes', 'gateway', 'run',
+            'hermes', 'dashboard',
+            '--host', self.settings['dashboard_host'],
+            '--port', str(self.settings['dashboard_port']),
+            '--no-open',
             env=env,
             stdout=sys.stdout,
             stderr=sys.stderr,
         )
-        self.procs['gateway'] = proc
+        self.procs['dashboard'] = proc
 
     async def _start_ui(self, env: dict[str, str]) -> None:
         proc = await asyncio.create_subprocess_exec(
@@ -53,10 +71,10 @@ class Supervisor:
     async def run(self) -> int:
         await self.start()
         while not self.stopping:
-            done, _ = await asyncio.wait(
-                [asyncio.create_task(proc.wait(), name=name) for name, proc in self.procs.items()],
-                return_when=asyncio.FIRST_COMPLETED,
-            )
+            tasks = [asyncio.create_task(proc.wait(), name=name) for name, proc in self.procs.items()]
+            done, pending = await asyncio.wait(tasks, return_when=asyncio.FIRST_COMPLETED)
+            for task in pending:
+                task.cancel()
             for task in done:
                 name = task.get_name()
                 code = task.result()

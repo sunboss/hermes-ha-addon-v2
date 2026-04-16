@@ -1,0 +1,23 @@
+name: ci
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Install test dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install pytest fastapi pyyaml
+      - name: Compile Python files
+        run: |
+          python -m py_compile hermes_agent_v2/bootstrap.py hermes_agent_v2/run.py hermes_agent_v2/hermes_ui/auth_bridge.py hermes_agent_v2/hermes_ui/provider_shim.py hermes_agent_v2/hermes_ui/server.py
+      - name: Run tests
+        run: pytest -q

@@ -65,7 +65,7 @@ def migrate_legacy_opt_data() -> None:
 
 
 def build_env(options: dict[str, Any]) -> dict[str, str]:
-    env = {
+    return {
         'HASS_URL': 'http://supervisor/core',
         'SUPERVISOR_TOKEN': os.environ.get('SUPERVISOR_TOKEN', ''),
         'HASS_TOKEN': os.environ.get('SUPERVISOR_TOKEN', ''),
@@ -82,24 +82,30 @@ def build_env(options: dict[str, Any]) -> dict[str, str]:
         'OPENROUTER_API_KEY': str(options.get('openrouter_api_key') or ''),
         'HUGGINGFACE_API_KEY': str(options.get('huggingface_api_key') or ''),
         'HF_BASE_URL': str(options.get('hf_base_url') or 'https://api-inference.huggingface.co/v1'),
+        'OPENAI_OAUTH_CLIENT_ID': str(options.get('openai_oauth_client_id') or ''),
+        'OPENAI_OAUTH_REDIRECT_URI': str(options.get('openai_oauth_redirect_uri') or 'http://127.0.0.1:1455/auth/callback'),
+        'OPENAI_OAUTH_SCOPES': str(options.get('openai_oauth_scopes') or 'openid profile email offline_access'),
         'OPENAI_SHIM_MODEL': str(options.get('llm_model') or 'gpt-5.4'),
         'WORKSPACE_ROOT': str(options.get('workspace_root') or '/share/hermes/workspace'),
+        'HERMES_API_UPSTREAM': 'http://127.0.0.1:8642',
+        'ENABLE_DASHBOARD': 'true' if bool(options.get('enable_dashboard', True)) else 'false',
     }
-    return env
 
 
 def write_env_file(env: dict[str, str]) -> Path:
     path = DATA / '.env'
     lines = ['# Managed by Hermes Agent V2']
-    for k in sorted(env):
-        value = str(env[k]).replace('\\', '\\\\').replace('"', '\\"')
-        lines.append(f'{k}="{value}"')
-    _atomic_write(path, "\n".join(lines) + "\n")
+    for key in sorted(env):
+        value = str(env[key]).replace('\\', '\\\\').replace('"', '\\"')
+        lines.append(f'{key}="{value}"')
+    _atomic_write(path, '\n'.join(lines) + '\n')
     return path
 
 
 def write_auth_state(env: dict[str, str]) -> None:
     path = Path(env['AUTH_STORAGE_PATH']) / 'session.json'
+    if path.exists():
+        return
     payload = {
         'mode': env['AUTH_MODE'],
         'provider': env['AUTH_PROVIDER'],
@@ -108,7 +114,7 @@ def write_auth_state(env: dict[str, str]) -> None:
         'pending_login': None,
         'updated_at': None,
     }
-    _atomic_write(path, json.dumps(payload, indent=2, sort_keys=True) + "\n")
+    _atomic_write(path, json.dumps(payload, indent=2, sort_keys=True) + '\n')
 
 
 def write_config(options: dict[str, Any], env: dict[str, str]) -> Path:
@@ -122,10 +128,22 @@ def write_config(options: dict[str, Any], env: dict[str, str]) -> Path:
         except Exception:
             config = {}
 
+    provider = 'openai-codex'
+    base_url = 'https://chatgpt.com/backend-api/codex'
+    if env['OPENAI_BASE_URL'] and env['OPENAI_API_KEY']:
+        provider = 'openai'
+        base_url = env['OPENAI_BASE_URL']
+    elif env['OPENROUTER_API_KEY']:
+        provider = 'openrouter'
+        base_url = 'https://openrouter.ai/api/v1'
+    elif env['HUGGINGFACE_API_KEY'] and env['HF_BASE_URL']:
+        provider = 'openai'
+        base_url = env['HF_BASE_URL']
+
     config['model'] = {
         'default': str(options.get('llm_model') or 'gpt-5.4'),
-        'provider': 'openai-codex',
-        'base_url': 'https://chatgpt.com/backend-api/codex',
+        'provider': provider,
+        'base_url': base_url,
     }
     terminal = config.setdefault('terminal', {})
     terminal['backend'] = 'local'
@@ -157,7 +175,20 @@ def write_config(options: dict[str, Any], env: dict[str, str]) -> Path:
 def prepare() -> dict[str, Any]:
     options = _read_options()
     workspace = Path(str(options.get('workspace_root') or '/share/hermes/workspace'))
-    _mkdirs(DATA, DATA / 'auth', DATA / 'logs', DATA / 'sessions', DATA / 'memories', DATA / 'skills', DATA / 'runtime', CONFIG_DIR, workspace)
+    _mkdirs(
+        DATA,
+        DATA / 'auth',
+        DATA / 'logs',
+        DATA / 'sessions',
+        DATA / 'memories',
+        DATA / 'skills',
+        DATA / 'runtime',
+        CONFIG_DIR,
+        workspace,
+        workspace / 'exports',
+        workspace / 'imports',
+        workspace / 'scripts',
+    )
     migrate_legacy_opt_data()
     env = build_env(options)
     write_env_file(env)
@@ -171,4 +202,5 @@ def prepare() -> dict[str, Any]:
         'ui_port': int(os.environ.get('ADDON_UI_PORT', '8099')),
         'dashboard_host': os.environ.get('DASHBOARD_HOST', '127.0.0.1'),
         'dashboard_port': int(os.environ.get('DASHBOARD_PORT', '9119')),
+        'enable_dashboard': env['ENABLE_DASHBOARD'] == 'true',
     }
