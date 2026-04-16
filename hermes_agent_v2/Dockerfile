@@ -9,7 +9,8 @@ ENV ADDON_UI_PORT=8099
 ENV DASHBOARD_HOST=127.0.0.1
 ENV DASHBOARD_PORT=9119
 
-RUN /opt/hermes/.venv/bin/pip install --no-cache-dir --disable-pip-version-check     "fastapi>=0.115,<1" "uvicorn[standard]>=0.30,<1" "PyYAML>=6,<7"
+RUN uv pip install --python /opt/hermes/.venv/bin/python --no-cache \
+    "fastapi>=0.115,<1" "uvicorn[standard]>=0.30,<1" "PyYAML>=6,<7"
 
 COPY bootstrap.py /opt/hermes-ha-addon/bootstrap.py
 COPY run.py /opt/hermes-ha-addon/run.py
