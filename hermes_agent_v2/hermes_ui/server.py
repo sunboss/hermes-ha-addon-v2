@@ -64,7 +64,10 @@ def styles_css() -> FileResponse:
 
 @app.get('/meta')
 def meta() -> JSONResponse:
-    return JSONResponse({'version': ADDON_VERSION})
+    return JSONResponse({
+        'version': ADDON_VERSION,
+        'panel_websocket_proxy': False,
+    })
 
 
 @app.get('/health')

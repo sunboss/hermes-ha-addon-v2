@@ -76,7 +76,7 @@ def build_env(options: dict[str, Any]) -> dict[str, str]:
         'API_SERVER_MODEL_NAME': str(options.get('llm_model') or 'gpt-5.4'),
         'AUTH_MODE': str(options.get('auth_mode') or 'api_key'),
         'AUTH_PROVIDER': str(options.get('auth_provider') or 'openai_web'),
-        'AUTH_STORAGE_PATH': '/data/auth',
+        'AUTH_STORAGE_PATH': str(DATA / 'auth'),
         'OPENAI_BASE_URL': str(options.get('openai_base_url') or ''),
         'OPENAI_API_KEY': str(options.get('openai_api_key') or ''),
         'OPENROUTER_API_KEY': str(options.get('openrouter_api_key') or ''),

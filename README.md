@@ -28,4 +28,15 @@ A rebuilt Home Assistant add-on for Hermes Agent with:
 - `/auth/status`, `/auth/start`, `/auth/exchange`, `/auth/refresh`, `/auth/logout`
 - Config override file at `/config/hermes/config.override.yaml`
 - GitHub Actions CI
-- Release workflow stub for tags
+- Release workflow for version tags
+
+## Current limitation
+
+- `/panel/*` websocket proxy is not implemented yet.
+- The UI exposes this explicitly via `/meta -> panel_websocket_proxy: false`.
+
+## Docs
+
+- `docs/ARCHITECTURE.md`
+- `INSTALL.md`
+- `CHANGELOG.md`
