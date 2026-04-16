@@ -1,6 +1,6 @@
 name: "Hermes Agent V2"
 description: "Rebuilt Hermes Agent add-on with explicit HA mappings, supervised services, and safer state handling."
-version: "0.2.0"
+version: "0.3.0"
 slug: "hermes_agent_v2"
 init: true
 startup: "application"

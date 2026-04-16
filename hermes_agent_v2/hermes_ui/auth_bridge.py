@@ -65,10 +65,22 @@ def _oauth_ready() -> bool:
     return bool(OPENAI_OAUTH_CLIENT_ID and OPENAI_OAUTH_REDIRECT_URI and OPENAI_OAUTH_SCOPES)
 
 
+def _expires_in_seconds(expires_at: str | None) -> int | None:
+    if not expires_at:
+        return None
+    try:
+        dt = datetime.fromisoformat(expires_at)
+    except ValueError:
+        return None
+    return int((dt - _now()).total_seconds())
+
+
 def get_status() -> dict[str, Any]:
     state = _load()
     session = state.get('session') if isinstance(state.get('session'), dict) else None
     status = state.get('status') or ('not_required' if AUTH_MODE == 'api_key' else 'needs_login')
+    expires_at = session.get('expires_at') if session else None
+    expires_in = _expires_in_seconds(expires_at)
     return {
         'mode': AUTH_MODE,
         'provider': AUTH_PROVIDER,
@@ -77,7 +89,9 @@ def get_status() -> dict[str, Any]:
         'oauth_configured': _oauth_ready(),
         'has_session': bool(session),
         'account_id': session.get('account_id') if session else None,
-        'expires_at': session.get('expires_at') if session else None,
+        'expires_at': expires_at,
+        'expires_in': expires_in,
+        'can_refresh': bool(session and session.get('refresh_token')),
         'updated_at': state.get('updated_at'),
     }
 
@@ -106,18 +120,53 @@ def start_login() -> tuple[int, dict[str, Any]]:
     state['status'] = 'awaiting_callback'
     _save(state)
 
-    params = urllib.parse.urlencode(
-        {
-            'response_type': 'code',
-            'client_id': OPENAI_OAUTH_CLIENT_ID,
-            'redirect_uri': OPENAI_OAUTH_REDIRECT_URI,
-            'scope': OPENAI_OAUTH_SCOPES,
-            'state': pending['state'],
-            'code_challenge': pending['code_challenge'],
-            'code_challenge_method': 'S256',
-        }
-    )
+    params = urllib.parse.urlencode({
+        'response_type': 'code',
+        'client_id': OPENAI_OAUTH_CLIENT_ID,
+        'redirect_uri': OPENAI_OAUTH_REDIRECT_URI,
+        'scope': OPENAI_OAUTH_SCOPES,
+        'state': pending['state'],
+        'code_challenge': pending['code_challenge'],
+        'code_challenge_method': 'S256',
+    })
     return 200, {'auth_url': f'{OPENAI_AUTH_URL}?{params}'}
+
+
+def _exchange_token(form_data: dict[str, str]) -> dict[str, Any]:
+    body = urllib.parse.urlencode(form_data).encode('utf-8')
+    req = urllib.request.Request(
+        OPENAI_TOKEN_URL,
+        data=body,
+        headers={'Content-Type': 'application/x-www-form-urlencoded', 'Accept': 'application/json'},
+        method='POST',
+    )
+    with urllib.request.urlopen(req, timeout=45) as resp:
+        payload = json.loads(resp.read().decode('utf-8'))
+    if not isinstance(payload, dict):
+        raise ValueError('token_response_not_object')
+    return payload
+
+
+def _store_session(state: dict[str, Any], token_payload: dict[str, Any]) -> dict[str, Any]:
+    access_token = token_payload.get('access_token')
+    if not access_token:
+        raise ValueError('missing_access_token')
+    expires_in = int(token_payload.get('expires_in', 0) or 0)
+    old_session = state.get('session') if isinstance(state.get('session'), dict) else {}
+    session = {
+        'access_token': access_token,
+        'refresh_token': token_payload.get('refresh_token') or old_session.get('refresh_token'),
+        'token_type': token_payload.get('token_type') or 'Bearer',
+        'scope': token_payload.get('scope') or OPENAI_OAUTH_SCOPES,
+        'account_id': token_payload.get('account_id') or old_session.get('account_id'),
+        'obtained_at': _now().isoformat(),
+        'expires_at': (_now() + timedelta(seconds=expires_in)).isoformat() if expires_in else None,
+    }
+    state['session'] = session
+    state['pending_login'] = None
+    state['status'] = 'authenticated'
+    _save(state)
+    return session
 
 
 def complete_login(code: str | None, state_value: str | None) -> tuple[int, dict[str, Any]]:
@@ -136,46 +185,51 @@ def complete_login(code: str | None, state_value: str | None) -> tuple[int, dict
     if not code or state_value != pending.get('state'):
         return 400, {'error': 'state_mismatch_or_missing_code'}
 
-    body = urllib.parse.urlencode(
-        {
+    try:
+        token_payload = _exchange_token({
             'grant_type': 'authorization_code',
             'client_id': OPENAI_OAUTH_CLIENT_ID,
             'code': code,
             'redirect_uri': pending['redirect_uri'],
             'code_verifier': pending['code_verifier'],
-        }
-    ).encode()
-    req = urllib.request.Request(
-        OPENAI_TOKEN_URL,
-        data=body,
-        headers={'Content-Type': 'application/x-www-form-urlencoded', 'Accept': 'application/json'},
-        method='POST',
-    )
-    try:
-        with urllib.request.urlopen(req, timeout=45) as resp:
-            token_payload = json.loads(resp.read().decode('utf-8'))
+        })
     except urllib.error.HTTPError as exc:
         return 502, {'error': 'token_exchange_failed', 'status_code': exc.code}
+    except Exception:
+        return 502, {'error': 'token_exchange_failed'}
 
-    access_token = token_payload.get('access_token')
-    if not access_token:
+    try:
+        _store_session(state, token_payload)
+    except ValueError:
         return 502, {'error': 'token_exchange_incomplete'}
+    return 200, {'ok': True, 'status': get_status()}
 
-    expires_in = int(token_payload.get('expires_in', 0) or 0)
-    session = {
-        'access_token': access_token,
-        'refresh_token': token_payload.get('refresh_token'),
-        'token_type': token_payload.get('token_type') or 'Bearer',
-        'scope': token_payload.get('scope') or OPENAI_OAUTH_SCOPES,
-        'account_id': token_payload.get('account_id'),
-        'obtained_at': _now().isoformat(),
-        'expires_at': (_now() + timedelta(seconds=expires_in)).isoformat() if expires_in else None,
-    }
-    state['session'] = session
-    state['pending_login'] = None
-    state['status'] = 'authenticated'
-    _save(state)
-    return 200, {'ok': True}
+
+def refresh_session() -> tuple[int, dict[str, Any]]:
+    state = _load()
+    session = state.get('session') if isinstance(state.get('session'), dict) else None
+    if AUTH_MODE != 'web_login':
+        return 400, {'error': 'web_login_not_enabled'}
+    if not session:
+        return 400, {'error': 'session_missing'}
+    refresh_token = session.get('refresh_token')
+    if not refresh_token:
+        return 400, {'error': 'refresh_token_missing'}
+    try:
+        token_payload = _exchange_token({
+            'grant_type': 'refresh_token',
+            'client_id': OPENAI_OAUTH_CLIENT_ID,
+            'refresh_token': refresh_token,
+        })
+    except urllib.error.HTTPError as exc:
+        return 502, {'error': 'refresh_failed', 'status_code': exc.code}
+    except Exception:
+        return 502, {'error': 'refresh_failed'}
+    try:
+        _store_session(state, token_payload)
+    except ValueError:
+        return 502, {'error': 'refresh_incomplete'}
+    return 200, {'ok': True, 'status': get_status()}
 
 
 def clear_session() -> dict[str, Any]:

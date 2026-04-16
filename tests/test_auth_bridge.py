@@ -18,7 +18,7 @@ def test_pending_login_expiry_is_enforced(tmp_path, monkeypatch):
     monkeypatch.setattr(auth_bridge, 'OPENAI_OAUTH_CLIENT_ID', 'client')
     monkeypatch.setattr(auth_bridge, 'OPENAI_OAUTH_REDIRECT_URI', 'http://localhost/callback')
     monkeypatch.setattr(auth_bridge, 'OPENAI_OAUTH_SCOPES', 'openid profile')
-    status_code, payload = auth_bridge.start_login()
+    status_code, _ = auth_bridge.start_login()
     assert status_code == 200
     state = auth_bridge._load()
     pending = state['pending_login']
@@ -29,3 +29,16 @@ def test_pending_login_expiry_is_enforced(tmp_path, monkeypatch):
     status_code, payload = auth_bridge.complete_login('code', pending['state'])
     assert status_code == 400
     assert payload['error'] == 'pending_login_expired'
+
+
+def test_refresh_requires_refresh_token(tmp_path, monkeypatch):
+    monkeypatch.setattr(auth_bridge, 'SESSION_PATH', tmp_path / 'session.json')
+    monkeypatch.setattr(auth_bridge, 'AUTH_STORAGE_PATH', tmp_path)
+    monkeypatch.setattr(auth_bridge, 'AUTH_MODE', 'web_login')
+    state = auth_bridge._default_state()
+    state['status'] = 'authenticated'
+    state['session'] = {'access_token': 'x', 'refresh_token': None}
+    auth_bridge._save(state)
+    status_code, payload = auth_bridge.refresh_session()
+    assert status_code == 400
+    assert payload['error'] == 'refresh_token_missing'
