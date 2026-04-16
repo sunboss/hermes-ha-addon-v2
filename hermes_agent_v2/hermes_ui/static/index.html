@@ -1,0 +1,30 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Hermes Agent V2</title>
+  <link rel="stylesheet" href="/styles.css">
+</head>
+<body>
+  <main class="wrap">
+    <h1>Hermes Agent V2</h1>
+    <p>Reliable Home Assistant add-on wrapper for Hermes Agent.</p>
+    <section class="card">
+      <div id="health">Loading health…</div>
+      <div id="model">Loading model…</div>
+      <div id="auth">Loading auth…</div>
+    </section>
+    <section class="card">
+      <h2>Design</h2>
+      <ul>
+        <li>Internal state lives in <code>/data</code></li>
+        <li>User workspace lives in <code>/share/hermes/workspace</code></li>
+        <li>Optional overrides live in <code>/config/hermes</code></li>
+        <li>No steady-state dependency on <code>/opt/data</code></li>
+      </ul>
+    </section>
+  </main>
+  <script src="/app.js"></script>
+</body>
+</html>
