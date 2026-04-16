@@ -16,4 +16,4 @@ def test_meta_declares_panel_websocket_capability():
     response = client.get('/meta')
     assert response.status_code == 200
     data = response.json()
-    assert 'panel_websocket_proxy' in data
+    assert data['panel_websocket_proxy'] is True

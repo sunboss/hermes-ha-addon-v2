@@ -1,6 +1,6 @@
 # Hermes Agent HA Add-on V2
 
-Version: 0.3.0
+Version: 0.4.0
 
 A rebuilt Home Assistant add-on for Hermes Agent with:
 - explicit HA directory mapping (`/data` internal state, `/share/hermes/workspace` user workspace)
@@ -32,8 +32,7 @@ A rebuilt Home Assistant add-on for Hermes Agent with:
 
 ## Current limitation
 
-- `/panel/*` websocket proxy is not implemented yet.
-- The UI exposes this explicitly via `/meta -> panel_websocket_proxy: false`.
+- `/panel/*` now includes a FastAPI-to-upstream websocket proxy path for dashboard views that require WS transport.
 
 ## Docs
 

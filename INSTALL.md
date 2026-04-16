@@ -21,4 +21,4 @@
 
 ## Current limitation
 
-`/panel/*` is currently proxied over HTTP only. If the upstream dashboard requires websocket transport for a specific feature, that feature is not yet supported in this release.
+Dashboard HTTP and websocket routes are both proxied by this release.

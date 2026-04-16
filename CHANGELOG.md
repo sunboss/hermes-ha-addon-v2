@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.4.0
+- Added `/panel/*` websocket proxy support
+- Added websocket URL builder test
+- Updated CI dependencies for websocket support
+
 ## 0.3.0
 - Added auth refresh endpoint and UI action
 - Added release workflow

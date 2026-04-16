@@ -1,11 +1,14 @@
 from __future__ import annotations
 
+import asyncio
 import os
+import urllib.parse
 import urllib.request
 from pathlib import Path
 
+import websockets
 import yaml
-from fastapi import FastAPI, HTTPException, Request
+from fastapi import FastAPI, HTTPException, Request, WebSocket, WebSocketDisconnect
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, RedirectResponse, Response
 
 from hermes_ui.auth_bridge import clear_session, complete_login, get_status, refresh_session, start_login
@@ -17,7 +20,7 @@ API_KEY = os.environ.get('API_SERVER_KEY', '')
 STATIC_DIR = Path('/opt/hermes-ha-addon/hermes_ui/static')
 CONFIG_PATH = Path(os.environ.get('HERMES_HOME', '/data')) / 'config.yaml'
 PANEL_BASE = f"http://{os.environ.get('DASHBOARD_HOST', '127.0.0.1')}:{os.environ.get('DASHBOARD_PORT', '9119')}"
-ADDON_VERSION = os.environ.get('ADDON_VERSION', '0.3.0')
+ADDON_VERSION = os.environ.get('ADDON_VERSION', '0.4.0')
 
 app = FastAPI(title='Hermes Agent V2 UI')
 
@@ -47,6 +50,16 @@ def _proxy_panel(method: str, path: str, body: bytes | None = None, content_type
     return _proxy_raw(PANEL_BASE, method, path, body, content_type)
 
 
+def _build_panel_ws_url(path: str, query: str = '') -> str:
+    parsed = urllib.parse.urlsplit(PANEL_BASE)
+    scheme = 'wss' if parsed.scheme == 'https' else 'ws'
+    normalized_path = '/' + path.lstrip('/')
+    url = f'{scheme}://{parsed.netloc}{normalized_path}'
+    if query:
+        url += f'?{query}'
+    return url
+
+
 @app.get('/', response_class=HTMLResponse)
 def index() -> str:
     return (STATIC_DIR / 'index.html').read_text(encoding='utf-8')
@@ -64,10 +77,7 @@ def styles_css() -> FileResponse:
 
 @app.get('/meta')
 def meta() -> JSONResponse:
-    return JSONResponse({
-        'version': ADDON_VERSION,
-        'panel_websocket_proxy': False,
-    })
+    return JSONResponse({'version': ADDON_VERSION, 'panel_websocket_proxy': True})
 
 
 @app.get('/health')
@@ -146,6 +156,49 @@ async def shim_chat(request: Request) -> JSONResponse:
 @app.get('/panel')
 def panel_root() -> RedirectResponse:
     return RedirectResponse('/panel/')
+
+
+@app.websocket('/panel/{path:path}')
+async def panel_websocket_proxy(path: str, websocket: WebSocket) -> None:
+    query_string = websocket.scope.get('query_string', b'').decode('utf-8')
+    upstream_url = _build_panel_ws_url(path, query_string)
+    await websocket.accept()
+    try:
+        async with websockets.connect(upstream_url) as upstream:
+            async def client_to_upstream() -> None:
+                while True:
+                    try:
+                        message = await websocket.receive()
+                    except WebSocketDisconnect:
+                        break
+                    msg_type = message.get('type')
+                    if msg_type == 'websocket.disconnect':
+                        break
+                    if message.get('text') is not None:
+                        await upstream.send(message['text'])
+                    elif message.get('bytes') is not None:
+                        await upstream.send(message['bytes'])
+
+            async def upstream_to_client() -> None:
+                async for message in upstream:
+                    if isinstance(message, bytes):
+                        await websocket.send_bytes(message)
+                    else:
+                        await websocket.send_text(message)
+
+            tasks = [
+                asyncio.create_task(client_to_upstream()),
+                asyncio.create_task(upstream_to_client()),
+            ]
+            done, pending = await asyncio.wait(tasks, return_when=asyncio.FIRST_COMPLETED)
+            for task in pending:
+                task.cancel()
+            for task in done:
+                exc = task.exception()
+                if exc:
+                    raise exc
+    except Exception:
+        await websocket.close(code=1011)
 
 
 @app.api_route('/panel/{path:path}', methods=['GET', 'POST', 'PUT', 'PATCH', 'DELETE'])
