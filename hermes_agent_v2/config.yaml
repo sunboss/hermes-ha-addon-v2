@@ -53,8 +53,8 @@ schema:
   watch_domains:
     - "str"
   watch_entities:
-    - 'match(^[a-z_][a-z0-9_]*\.[a-z0-9_]+$)'
+    - "match(^[a-z_][a-z0-9_]*\\.[a-z0-9_]+$)"
   ignore_entities:
-    - 'match(^[a-z_][a-z0-9_]*\.[a-z0-9_]+$)'
+    - "match(^[a-z_][a-z0-9_]*\\.[a-z0-9_]+$)"
   watch_all: "bool"
   cooldown_seconds: "int(0,3600)"
